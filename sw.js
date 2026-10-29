@@ -1,5 +1,5 @@
 // Offline support: app shell is precached, three.js modules are cached on first use.
-const CACHE = 'depthscan-v1';
+const CACHE = 'depthscan-v2';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg',
   'js/main.js', 'js/store.js', 'js/pointcloud.js', 'js/scanner.js', 'js/viewer.js', 'js/exporters.js',

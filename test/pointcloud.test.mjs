@@ -1,7 +1,7 @@
 // Run: node --test test/
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VoxelAccumulator, unprojectDepth, buildVoxelMesh, voxelKey } from '../js/pointcloud.js';
+import { VoxelAccumulator, unprojectDepth, buildVoxelMesh, voxelKey, downsampleToBudget } from '../js/pointcloud.js';
 
 // Column-major perspective matrix (same layout as WebXR / three.js)
 function perspective(fovY, aspect, near, far) {
@@ -78,4 +78,18 @@ test('voxel mesh of a single voxel is a closed cube; two adjacent share no face'
     const sn = [one.normals[i[f] * 3], one.normals[i[f] * 3 + 1], one.normals[i[f] * 3 + 2]];
     assert.ok(n[0] * sn[0] + n[1] * sn[1] + n[2] * sn[2] > 0, `face ${f / 6} winding`);
   }
+});
+
+test('downsampleToBudget coarsens until the cloud fits', () => {
+  const n = 100 * 100, pos = new Float32Array(n * 3), col = new Uint8Array(n * 3).fill(128);
+  for (let i = 0; i < n; i++) { pos[i * 3] = (i % 100) * 0.01 + 0.005; pos[i * 3 + 2] = Math.floor(i / 100) * 0.01 + 0.005; }
+  const fine = downsampleToBudget(pos, col, n, 0.01, 20000);
+  assert.equal(fine.count, n);
+  assert.equal(fine.voxelSize, 0.01);
+  const coarse = downsampleToBudget(pos, col, n, 0.01, 1000);
+  assert.ok(coarse.count <= 1000 && coarse.voxelSize > 0.01);
+  // every mesh vertex points back at a real voxel
+  const m = buildVoxelMesh(coarse.positions, coarse.colors, coarse.count, coarse.voxelSize);
+  assert.equal(m.source.length, m.positions.length / 3);
+  assert.ok(Math.max(...m.source) < coarse.count);
 });

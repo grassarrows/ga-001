@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
 import { PLYExporter } from 'three/addons/exporters/PLYExporter.js';
+import { USDZExporter } from 'three/addons/exporters/USDZExporter.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -54,6 +55,16 @@ export function objectToPLY(object) {
     new PLYExporter().parse(object, (data) => resolve(new Blob([data], { type: 'application/octet-stream' })), { binary: true });
   });
 }
+
+export async function objectToUSDZ(object) {
+  const data = await new USDZExporter().parse(object, { quickLookCompatible: true });
+  return new Blob([data], { type: 'model/vnd.usdz+zip' });
+}
+
+// True on iPhone / iPad Safari (and other WebKit iOS browsers) with AR Quick Look.
+export const supportsQuickLook = (() => {
+  try { return document.createElement('a').relList.supports('ar'); } catch { return false; }
+})();
 
 // Shares on mobile when possible (lands in Files / AirDrop / Drive), else downloads.
 export async function saveBlob(blob, filename) {

@@ -1,7 +1,7 @@
 // Touch-friendly 3D viewer: orbit, measure, display options, voxel meshing.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildVoxelMesh, heightRamp } from './pointcloud.js';
+import { buildVoxelMesh, heightRamp, downsampleToBudget } from './pointcloud.js';
 import { loadMeshObject } from './exporters.js';
 
 export class Viewer {
@@ -204,7 +204,155 @@ export class Viewer {
   exportVoxelMesh() {
     if (!this.voxelMesh) { this.toggleVoxelMesh(); this.toggleVoxelMesh(); }
     const geo = this.voxelMesh.geometry.clone().applyMatrix4(this.content.matrixWorld);
+    // glTF vertex colors are linear; ours are sRGB camera values.
+    const col = geo.getAttribute('color'), c = new THREE.Color();
+    for (let i = 0; i < col.count; i++) {
+      c.fromBufferAttribute(col, i).convertSRGBToLinear();
+      col.setXYZ(i, c.r, c.g, c.b);
+    }
     return new THREE.Mesh(geo, this.origMats.get(this.voxelMesh) || this.voxelMesh.material);
+  }
+
+  // Textured, floor-anchored copy of the scan for USDZ / AR Quick Look.
+  // Quick Look has no vertex colors, so voxel colors are baked into a texture.
+  buildARObject(budget = 20000) {
+    const root = new THREE.Group();
+    if (this.points) {
+      const ds = downsampleToBudget(this.worldPositions(), this.rgb, this.rec.count, this.spacing, budget);
+      const m = buildVoxelMesh(ds.positions, ds.colors, ds.count, ds.voxelSize);
+      const cols = Math.ceil(Math.sqrt(ds.count));
+      const cell = Math.max(1, Math.min(4, Math.floor(1024 / cols))); // >1px cells limit mipmap bleed
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = cols * cell;
+      const ctx = canvas.getContext('2d');
+      for (let i = 0; i < ds.count; i++) {
+        const c = ds.colors;
+        ctx.fillStyle = `rgb(${c[i * 3]},${c[i * 3 + 1]},${c[i * 3 + 2]})`;
+        ctx.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell, cell);
+      }
+      const uv = new Float32Array(m.source.length * 2);
+      for (let k = 0; k < m.source.length; k++) {
+        const i = m.source[k];
+        uv[k * 2] = ((i % cols) + 0.5) / cols;
+        uv[k * 2 + 1] = 1 - (Math.floor(i / cols) + 0.5) / cols; // texture is flipped on export
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      geo.setIndex(new THREE.BufferAttribute(m.index, 1));
+      const map = new THREE.CanvasTexture(canvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      root.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map, roughness: 1 })));
+    } else if (!this.meshIsLight()) {
+      // Too heavy (or colored per-vertex, which Quick Look ignores): resample the
+      // surface into a cloud and send it through the textured voxel path above.
+      const cloud = this.sampleMeshSurface(budget * 20);
+      const keep = { points: this.points, rgb: this.rgb, rec: this.rec, spacing: this.spacing };
+      const area = cloud.area;
+      Object.assign(this, {
+        points: true, rgb: cloud.colors, rec: { positions: cloud.positions, count: cloud.count },
+        spacing: Math.max(0.005, Math.sqrt(area / budget) / 2),
+      });
+      const rot = this.content.rotation.x;
+      this.content.rotation.x = 0; // samples are already in world space
+      this.content.updateMatrixWorld(true);
+      try { return this.buildARObject(budget); } finally {
+        Object.assign(this, keep);
+        this.content.rotation.x = rot;
+        this.content.updateMatrixWorld(true);
+      }
+    } else {
+      this.content.updateMatrixWorld(true);
+      this.content.traverse((o) => {
+        if (!o.isMesh) return;
+        const mat = this.origMats.get(o) || o.material;
+        const src = Array.isArray(mat) ? mat[0] : mat;
+        const std = src.isMeshStandardMaterial ? src
+          : new THREE.MeshStandardMaterial({ color: src.color ?? 0xc9ced6, map: src.map ?? null, roughness: 0.9 });
+        const mesh = new THREE.Mesh(o.geometry, std);
+        o.matrixWorld.decompose(mesh.position, mesh.quaternion, mesh.scale);
+        root.add(mesh);
+      });
+    }
+    // Sit the model on the detected floor, centered on the anchor.
+    const wrap = new THREE.Group();
+    wrap.add(root);
+    const box = new THREE.Box3().setFromObject(root);
+    const c = box.getCenter(new THREE.Vector3());
+    root.position.set(-c.x, -box.min.y, -c.z);
+    wrap.updateMatrixWorld(true);
+    return wrap;
+  }
+
+  // Meshes Quick Look can take as-is: modest size, colors from textures/materials.
+  meshIsLight(maxVerts = 300_000) {
+    let verts = 0, vertexColored = false;
+    this.content.traverse((o) => {
+      if (!o.isMesh) return;
+      verts += o.geometry.getAttribute('position').count;
+      const mat = this.origMats.get(o) || o.material;
+      if (o.geometry.getAttribute('color') && [].concat(mat).some((m) => m.vertexColors && !m.map)) vertexColored = true;
+    });
+    return verts <= maxVerts && !vertexColored;
+  }
+
+  // Area-weighted random points on every triangle (world space), colored from
+  // vertex colors, the texture at that UV, or the material color.
+  sampleMeshSurface(target) {
+    const meshes = [];
+    let total = 0;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), t = new THREE.Triangle();
+    this.content.updateMatrixWorld(true);
+    this.content.traverse((o) => {
+      if (!o.isMesh) return;
+      const g = o.geometry, pos = g.getAttribute('position'), idx = g.index;
+      const tris = idx ? idx.count / 3 : pos.count / 3;
+      const areas = new Float32Array(tris);
+      for (let f = 0; f < tris; f++) {
+        const [i0, i1, i2] = idx ? [idx.getX(f * 3), idx.getX(f * 3 + 1), idx.getX(f * 3 + 2)] : [f * 3, f * 3 + 1, f * 3 + 2];
+        a.fromBufferAttribute(pos, i0).applyMatrix4(o.matrixWorld);
+        b.fromBufferAttribute(pos, i1).applyMatrix4(o.matrixWorld);
+        c.fromBufferAttribute(pos, i2).applyMatrix4(o.matrixWorld);
+        areas[f] = t.set(a, b, c).getArea();
+        total += areas[f];
+      }
+      const mat = [].concat(this.origMats.get(o) || o.material)[0];
+      meshes.push({ o, areas, mat, tex: textureSampler(mat.map) });
+    });
+    const pts = [], cols = [];
+    const uvA = new THREE.Vector2(), uvB = new THREE.Vector2(), uvC = new THREE.Vector2(), rgb = [0, 0, 0];
+    const p = new THREE.Vector3(), col = new THREE.Color();
+    for (const { o, areas, mat, tex } of meshes) {
+      const g = o.geometry, pos = g.getAttribute('position'), idx = g.index, uv = g.getAttribute('uv'), vc = g.getAttribute('color');
+      const base = mat.color ? mat.color.clone().convertLinearToSRGB() : new THREE.Color(0.8, 0.8, 0.8);
+      for (let f = 0; f < areas.length; f++) {
+        const want = (areas[f] / total) * target;
+        let n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+        if (!n) continue;
+        const [i0, i1, i2] = idx ? [idx.getX(f * 3), idx.getX(f * 3 + 1), idx.getX(f * 3 + 2)] : [f * 3, f * 3 + 1, f * 3 + 2];
+        a.fromBufferAttribute(pos, i0).applyMatrix4(o.matrixWorld);
+        b.fromBufferAttribute(pos, i1).applyMatrix4(o.matrixWorld);
+        c.fromBufferAttribute(pos, i2).applyMatrix4(o.matrixWorld);
+        if (uv) { uvA.fromBufferAttribute(uv, i0); uvB.fromBufferAttribute(uv, i1); uvC.fromBufferAttribute(uv, i2); }
+        while (n--) {
+          let r1 = Math.random(), r2 = Math.random();
+          if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+          const r0 = 1 - r1 - r2;
+          p.set(0, 0, 0).addScaledVector(a, r0).addScaledVector(b, r1).addScaledVector(c, r2);
+          pts.push(p.x, p.y, p.z);
+          if (tex && uv) {
+            tex(uvA.x * r0 + uvB.x * r1 + uvC.x * r2, uvA.y * r0 + uvB.y * r1 + uvC.y * r2, rgb);
+            cols.push(rgb[0] * base.r, rgb[1] * base.g, rgb[2] * base.b);
+          } else if (vc) {
+            col.setRGB(vc.getX(i0) * r0 + vc.getX(i1) * r1 + vc.getX(i2) * r2, vc.getY(i0) * r0 + vc.getY(i1) * r1 + vc.getY(i2) * r2, vc.getZ(i0) * r0 + vc.getZ(i1) * r1 + vc.getZ(i2) * r2);
+            if (vc.normalized || vc.array instanceof Float32Array) col.convertLinearToSRGB();
+            cols.push(col.r * 255, col.g * 255, col.b * 255);
+          } else cols.push(base.r * 255, base.g * 255, base.b * 255);
+        }
+      }
+    }
+    return { positions: new Float32Array(pts), colors: Uint8Array.from(cols), count: pts.length / 3, area: total };
   }
 
   // Positions with the content transform (e.g. flipped up axis) baked in.
@@ -297,4 +445,23 @@ export class Viewer {
     ctx.drawImage(src, (src.width - s) / 2, (src.height - s) / 2, s, s, 0, 0, size, size);
     return c.toDataURL('image/jpeg', 0.75);
   }
+}
+
+// Returns (u, v, out) -> sRGB 0-255 lookup for a texture's image, or null.
+function textureSampler(map) {
+  const img = map?.image;
+  if (!img?.width) return null;
+  const w = Math.min(img.width, 1024), h = Math.round(img.height * (w / img.width));
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  try { ctx.drawImage(img, 0, 0, w, h); } catch { return null; }
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const flip = map.flipY;
+  return (u, v, out) => {
+    u -= Math.floor(u); v -= Math.floor(v);
+    const x = Math.min(w - 1, (u * w) | 0), y = Math.min(h - 1, ((flip ? 1 - v : v) * h) | 0);
+    const o = (y * w + x) * 4;
+    out[0] = px[o]; out[1] = px[o + 1]; out[2] = px[o + 2];
+  };
 }

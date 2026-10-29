@@ -8,8 +8,9 @@ A Polycam-style 3D capture tool that runs in the mobile browser. No build step, 
 - **Viewer** for touch screens: one finger orbits, two fingers zoom and pan. Color by captured RGB, height or plain. Point size and grid toggle.
 - **Measure**: tap two points to get the distance, plus its vertical and horizontal parts. Switch between metric and imperial.
 - **Mesh**: turns a point cloud into a voxel surface mesh.
+- **View in AR on iPhone / iPad**: the AR button turns any capture into a USDZ and opens it in Apple's AR Quick Look, placed on your floor at real size. Point scans get a lightweight textured voxel mesh, and heavy imported meshes are resampled to stay under about 10 MB.
 - **Import** from other scanner apps (Polycam, 3D Scanner App, Scaniverse): `.ply` (points or mesh), `.obj`, `.glb`, self-contained `.gltf`, `.xyz` / `.pts` / `.txt` / `.csv`.
-- **Export**: point clouds as PLY / XYZ, or as a voxel mesh in GLB / OBJ. Meshes export as GLB / OBJ / PLY or in their original format. On phones, exports open the system share sheet.
+- **Export**: point clouds as PLY / XYZ, or as a voxel mesh in GLB / OBJ / USDZ. Meshes export as GLB / OBJ / PLY / USDZ or in their original format. On phones, exports open the system share sheet.
 - **Installable PWA** that works offline after the first load.
 - **Demo scan**, so you can try the app on any device.
 
@@ -18,7 +19,7 @@ A Polycam-style 3D capture tool that runs in the mobile browser. No build step, 
 | Device | Live scan | View / measure / export |
 | --- | --- | --- |
 | Android + Chrome (ARCore with depth) | ✅ | ✅ |
-| iPhone / iPad (Safari, Chrome) | ❌ iOS doesn't expose LiDAR or WebXR to web pages | ✅ capture in a native app and import here |
+| iPhone / iPad (Safari) | ❌ iOS doesn't expose LiDAR or WebXR to web pages | ✅ plus **View in AR** (AR Quick Look); capture in a native app and import here |
 | Desktop | ❌ | ✅ |
 
 WebXR only runs on **HTTPS** (or `localhost`).

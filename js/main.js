@@ -4,6 +4,7 @@ import { Scanner, depthSupport } from './scanner.js';
 import { Viewer } from './viewer.js';
 import {
   importFile, saveBlob, pointsToPLY, pointsToXYZ, objectToGLB, objectToOBJ, objectToPLY,
+  objectToUSDZ, supportsQuickLook,
 } from './exporters.js';
 
 const $ = (s) => document.querySelector(s);
@@ -121,7 +122,7 @@ function hint(text) {
 }
 
 function closePanels(except) {
-  for (const id of ['#panel-display', '#panel-export', '#more-menu']) {
+  for (const id of ['#panel-display', '#panel-export', '#panel-ar', '#more-menu']) {
     if (id !== except) $(id).classList.add('hidden');
   }
 }
@@ -137,7 +138,52 @@ function setTool(tool) {
   } else hint('Tap two points to measure');
 }
 
+// ---------- AR Quick Look ----------
+let arModel; // { id, blob, url } for the scan currently prepared
+
+function resetAR() {
+  if (arModel) URL.revokeObjectURL(arModel.url);
+  arModel = null;
+}
+
+async function getARModel() {
+  if (arModel?.id !== current.id) {
+    resetAR();
+    const blob = await busy('Preparing AR model…', () => objectToUSDZ(viewer.buildARObject()));
+    arModel = { id: current.id, blob, url: URL.createObjectURL(blob) };
+  }
+  return arModel;
+}
+
+async function prepareAR() {
+  $('#ar-ready').classList.add('hidden');
+  $('#ar-unsupported').classList.toggle('hidden', supportsQuickLook);
+  if (!supportsQuickLook) return;
+  try {
+    const m = await getARModel();
+    $('#ar-link').href = m.url;
+    $('#ar-img').src = current.thumb || 'icons/icon.svg';
+    const size = m.blob.size < 1e6 ? `${Math.ceil(m.blob.size / 1e3)} KB` : `${(m.blob.size / 1e6).toFixed(1)} MB`;
+    $('#ar-note').textContent = `Places the scan at real size on the floor · ${size}`;
+    $('#ar-ready').classList.remove('hidden');
+  } catch (e) {
+    console.error(e);
+    toast(`AR failed: ${e.message}`);
+  }
+}
+
+$('#btn-ar-download').onclick = async () => {
+  try {
+    const m = await getARModel();
+    await saveBlob(m.blob, `${slug(current.name)}.usdz`);
+  } catch (e) {
+    console.error(e);
+    toast(`Export failed: ${e.message}`);
+  }
+};
+
 function goHome() {
+  resetAR();
   viewer?.stop();
   viewer?.clear();
   current = null;
@@ -156,11 +202,12 @@ $('#scan-name').onchange = async (e) => {
 $$('.tool').forEach((btn) => {
   btn.onclick = () => {
     const tool = btn.dataset.tool;
-    if (tool === 'display' || tool === 'export') {
-      const panel = tool === 'display' ? '#panel-display' : '#panel-export';
+    if (tool === 'display' || tool === 'export' || tool === 'ar') {
+      const panel = `#panel-${tool}`;
       closePanels(panel);
       const open = $(panel).classList.toggle('hidden') === false;
       if (tool === 'export' && open) buildExportList();
+      if (tool === 'ar' && open) prepareAR();
       return;
     }
     closePanels();
@@ -188,6 +235,7 @@ $('#more-menu').onclick = async (e) => {
   if (act === 'fit') viewer.fit();
   if (act === 'floor') {
     const rotX = viewer.flipUp();
+    resetAR();
     viewer.applyColor();
     current.rotX = rotX;
     await updateScan(current.id, { rotX, thumb: viewer.thumbnail() });
@@ -225,11 +273,13 @@ function buildExportList() {
       ['XYZ', 'Text points + RGB', () => pointsToXYZ(viewer.worldPositions(), current.colors, current.count), 'xyz'],
       ['GLB', 'Voxel mesh', () => objectToGLB(viewer.exportVoxelMesh()), 'glb'],
       ['OBJ', 'Voxel mesh', () => objectToOBJ(viewer.exportVoxelMesh()), 'obj'],
+      ['USDZ', 'iPhone AR / Apple apps', () => getARModel().then((m) => m.blob), 'usdz'],
     ]
     : [
       ['GLB', 'Binary glTF', () => objectToGLB(viewer.content), 'glb'],
       ['OBJ', 'Wavefront', () => objectToOBJ(viewer.content), 'obj'],
       ['PLY', 'Mesh', () => objectToPLY(viewer.content), 'ply'],
+      ['USDZ', 'iPhone AR / Apple apps', () => getARModel().then((m) => m.blob), 'usdz'],
       ['Original', current.ext.toUpperCase(), () => new Blob([current.data]), current.ext],
     ];
   for (const [label, desc, make, ext] of items) {

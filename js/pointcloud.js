@@ -129,7 +129,7 @@ export function buildVoxelMesh(positions, colors, count, voxelSize, maxFaces = 3
     [0, 0, 1, [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
     [0, 0, -1, [1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]],
   ];
-  const pos = [], col = [], nor = [], idx = [];
+  const pos = [], col = [], nor = [], idx = [], src = [];
   let v = 0;
   for (const [key, i] of occ) {
     const iz = (key % SPAN) - OFF;
@@ -142,6 +142,7 @@ export function buildVoxelMesh(positions, colors, count, voxelSize, maxFaces = 3
         pos.push((ix + c[0]) * s, (iy + c[1]) * s, (iz + c[2]) * s);
         col.push(r, g, b);
         nor.push(dx, dy, dz);
+        src.push(i);
       }
       idx.push(v, v + 1, v + 2, v, v + 2, v + 3);
       v += 4;
@@ -154,7 +155,22 @@ export function buildVoxelMesh(positions, colors, count, voxelSize, maxFaces = 3
     colors: new Float32Array(col),
     normals: new Float32Array(nor),
     index: v > 65535 ? new Uint32Array(idx) : new Uint16Array(idx),
+    source: new Uint32Array(src), // per-vertex index of the point it came from
   };
+}
+
+// Re-fuses a cloud at the finest voxel size (>= minSize) that keeps it under
+// `budget` voxels. Used to keep AR / USDZ models light enough for phones.
+export function downsampleToBudget(positions, colors, count, minSize, budget) {
+  for (let size = minSize; ; size *= 1.25) {
+    const acc = new VoxelAccumulator(size, budget);
+    let i = 0;
+    for (; i < count; i++) {
+      const p = i * 3;
+      if (!acc.add(positions[p], positions[p + 1], positions[p + 2], colors[p], colors[p + 1], colors[p + 2])) break;
+    }
+    if (i === count) return acc.export(1);
+  }
 }
 
 // Perceptual-ish rainbow for height coloring. t in [0,1] -> [r,g,b] 0-255
