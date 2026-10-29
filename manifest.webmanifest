@@ -1,0 +1,14 @@
+{
+  "name": "DepthScan",
+  "short_name": "DepthScan",
+  "description": "Capture, view, measure and export 3D scans in the browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

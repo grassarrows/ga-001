@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>DepthScan</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Library -->
+  <section id="home" class="view active">
+    <header class="topbar">
+      <div class="brand"><span class="logo"></span>DepthScan</div>
+      <button class="icon-btn" id="btn-about" aria-label="About">?</button>
+    </header>
+
+    <div id="support-banner" class="banner hidden"></div>
+
+    <main class="library">
+      <div class="section-head">
+        <h2>Captures</h2>
+        <span id="scan-count" class="muted"></span>
+      </div>
+      <div id="gallery" class="gallery"></div>
+      <div id="empty" class="empty hidden">
+        <div class="empty-art"></div>
+        <p>No captures yet.</p>
+        <p class="muted">Scan a room with a depth-capable phone, import a PLY / OBJ / GLB from another scanner app, or load the demo.</p>
+        <button class="btn ghost" id="btn-demo">Load demo scan</button>
+      </div>
+    </main>
+
+    <nav class="dock">
+      <label class="dock-btn" for="file-import">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>
+        <span>Import</span>
+      </label>
+      <input type="file" id="file-import" accept=".ply,.obj,.glb,.gltf,.xyz,.pts,.txt,.csv" hidden>
+      <button class="capture-btn" id="btn-new-scan" aria-label="New LiDAR scan"><span></span></button>
+      <button class="dock-btn" id="btn-demo-dock">
+        <svg viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z M3 7l9 5 9-5 M12 12v10"/></svg>
+        <span>Demo</span>
+      </button>
+    </nav>
+  </section>
+
+  <!-- AR capture (also used as WebXR dom-overlay root) -->
+  <section id="scan" class="view">
+    <div class="scan-top">
+      <button class="icon-btn" id="btn-scan-cancel" aria-label="Cancel">✕</button>
+      <div class="pill" id="scan-stats">0 pts</div>
+      <button class="icon-btn" id="btn-scan-settings" aria-label="Settings">⚙</button>
+    </div>
+    <div id="scan-hint" class="scan-hint">Move slowly and point at surfaces</div>
+    <div id="scan-settings" class="sheet hidden">
+      <label>Detail
+        <select id="opt-voxel">
+          <option value="0.01">High (1 cm)</option>
+          <option value="0.02" selected>Medium (2 cm)</option>
+          <option value="0.04">Low (4 cm)</option>
+        </select>
+      </label>
+      <label>Max range
+        <select id="opt-range">
+          <option value="2">2 m</option>
+          <option value="3.5" selected>3.5 m</option>
+          <option value="5">5 m</option>
+          <option value="8">8 m</option>
+        </select>
+      </label>
+      <label class="row"><input type="checkbox" id="opt-preview" checked> Show live points</label>
+    </div>
+    <div class="scan-bottom">
+      <button class="btn ghost small" id="btn-scan-reset">Reset</button>
+      <button class="record-btn" id="btn-record" aria-label="Record"><span></span></button>
+      <button class="btn primary small" id="btn-scan-done">Done</button>
+    </div>
+  </section>
+
+  <!-- Viewer -->
+  <section id="viewer" class="view">
+    <canvas id="viewer-canvas"></canvas>
+    <header class="viewer-top">
+      <button class="icon-btn" id="btn-back" aria-label="Back">‹</button>
+      <div class="title-wrap">
+        <input id="scan-name" class="title-input" spellcheck="false">
+        <div id="scan-meta" class="muted small-text"></div>
+      </div>
+      <button class="icon-btn" id="btn-more" aria-label="More">⋯</button>
+    </header>
+
+    <div id="measure-readout" class="measure-readout hidden"></div>
+    <div id="tool-hint" class="tool-hint hidden"></div>
+
+    <div id="more-menu" class="menu hidden">
+      <button data-act="fit">Recenter view</button>
+      <button data-act="floor">Flip up axis (Y/Z)</button>
+      <button data-act="units">Units: metric</button>
+      <button data-act="delete" class="danger">Delete capture</button>
+    </div>
+
+    <div id="panel-display" class="sheet hidden">
+      <label>Color
+        <select id="opt-color">
+          <option value="rgb">Captured color</option>
+          <option value="height">Height</option>
+          <option value="plain">Plain</option>
+        </select>
+      </label>
+      <label>Point size <input type="range" id="opt-size" min="0.5" max="6" step="0.25" value="2"></label>
+      <label class="row"><input type="checkbox" id="opt-grid" checked> Grid</label>
+    </div>
+
+    <div id="panel-export" class="sheet hidden">
+      <div class="sheet-title">Export</div>
+      <div id="export-list" class="export-list"></div>
+    </div>
+
+    <nav class="toolbar">
+      <button class="tool active" data-tool="orbit"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12a9 4 0 0 0 18 0 9 4 0 0 0-18 0"/></svg><span>Orbit</span></button>
+      <button class="tool" data-tool="measure"><svg viewBox="0 0 24 24"><path d="M3 17 17 3l4 4L7 21z M7 13l2 2 M10 10l2 2 M13 7l2 2"/></svg><span>Measure</span></button>
+      <button class="tool" data-tool="mesh"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z M4 4l16 16 M12 4v16 M4 12h16"/></svg><span>Mesh</span></button>
+      <button class="tool" data-tool="display"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18 M12 3a9 9 0 0 1 0 18" fill="currentColor"/></svg><span>Display</span></button>
+      <button class="tool" data-tool="export"><svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M4 13v7h16v-7"/></svg><span>Export</span></button>
+    </nav>
+  </section>
+
+  <div id="about" class="modal hidden">
+    <div class="modal-card">
+      <h3>DepthScan</h3>
+      <p>A browser-based 3D capture tool. Live scanning uses the <b>WebXR Depth Sensing API</b>, available in Chrome on ARCore Android phones (Pixel, Galaxy, …). Points are fused into a voxel grid in real time and colored from the camera when the browser allows.</p>
+      <p>iPhone/iPad browsers don't expose LiDAR to the web yet. Capture with a native app (Polycam, 3D Scanner App, Scaniverse) and import the PLY / OBJ / GLB here to view, measure and convert.</p>
+      <p class="muted">Everything stays on this device (IndexedDB). Nothing is uploaded.</p>
+      <button class="btn primary" id="btn-about-close">Got it</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="busy" class="busy hidden"><div class="spinner"></div><div id="busy-text">Working…</div></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
